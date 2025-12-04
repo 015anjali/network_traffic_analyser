@@ -1,3 +1,4 @@
+
 # worker/classifier_core.py
 import os
 import pandas as pd
@@ -66,25 +67,45 @@ def classify_flows(csv_path, last_n_seconds=None):
     import numpy as np
     import os
 
-    df = pd.DataFrame()  # define outside try-except
+    df = pd.DataFrame()
     try:
         if not os.path.exists(csv_path):
             print(f"[!] CSV not found: {csv_path}", file=sys.stderr)
             return df
 
-        df_read = pd.read_csv(csv_path)  # read into a separate var
+        df_read = pd.read_csv(csv_path)
         if df_read.empty:
             print("[!] CSV is empty", file=sys.stderr)
             return df
 
-        df = df_read.copy()  # assign to df after successful read
+        df = df_read.copy()
 
-        # Optional filtering
-        if last_n_seconds is not None and "FlowDuration" in df.columns:
+        # FIX: Only filter if last_n_seconds is provided and valid
+        if last_n_seconds is not None and last_n_seconds > 0 and "FlowDuration" in df.columns:
             max_dur = df["FlowDuration"].max()
-            df = df[df["FlowDuration"] >= max_dur - last_n_seconds]
+            threshold = max_dur - last_n_seconds
+            original_count = len(df)
+            df = df[df["FlowDuration"] >= threshold]
+            print(f"[CLASSIFIER] Filtered to last {last_n_seconds}s: {len(df)} rows (from {original_count})", flush=True)
+        else:
+            print(f"[CLASSIFIER] Using all {len(df)} flows (no time filter)", flush=True)
 
-        # Rename columns safely
+        # PRESERVE URL DATA BEFORE RENAMING - FIX NaN ISSUE
+        url_column = None
+        if 'URLs' in df.columns:
+            # Convert NaN to empty strings
+            url_column = df['URLs'].fillna('')
+        elif 'urls' in df.columns:
+            url_column = df['urls'].fillna('')
+
+        # Also preserve original IP/port data for frontend
+        original_columns = {}
+        frontend_columns = ['SrcIP', 'DstIP', 'SrcPort', 'DstPort', 'Protocol']
+        for col in frontend_columns:
+            if col in df.columns:
+                original_columns[col] = df[col]
+
+        # Rename columns safely for model
         df = df.rename(columns={k: v for k, v in COLUMN_MAPPING.items() if k in df.columns})
 
         # Ensure all model features exist
@@ -101,13 +122,19 @@ def classify_flows(csv_path, last_n_seconds=None):
         y_pred = MODEL.predict(X_scaled)
         df["Prediction"] = [LABEL_MAP.get(p, p) for p in y_pred]
 
+        # ADD BACK URL DATA AND ORIGINAL COLUMNS TO FINAL RESULT
+        if url_column is not None:
+            df["URLs"] = url_column
+            
+        # Add back original columns for frontend
+        for col, data in original_columns.items():
+            df[col] = data
+
+        print(f"[CLASSIFIER] Classification complete. Predictions: {df['Prediction'].value_counts().to_dict()}", flush=True)
+
     except Exception as e:
         print("[!] Exception in classify_flows:", e, file=sys.stderr)
         print(traceback.format_exc(), file=sys.stderr)
 
     return df
-
-
-
-
 

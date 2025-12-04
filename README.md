@@ -51,8 +51,25 @@ npm run dev
 * Backend runs on `http://localhost:3001`
 * Frontend runs on `http://localhost:5173`
 
+
 ---
 
+## 📁 Project Structure for Cron Job
+
+The project is organized into the following Python scripts located in the `/python_files` directory:
+
+| File | Description |
+| :--- | :--- |
+| `server.py` | Python server that hosts the ML model, stores data, and handles classification requests. |
+| `realtime_sniffer.py`| A client script that captures live traffic and sends it to the server for classification. |
+| `classify_ui.py` | A Streamlit web UI for uploading PCAP files or viewing live analysis. |
+| `pcap2csv_win.py` | A utility script to convert `.pcap` files to `.csv` format (for Windows). |
+| `pcap2csv_win_v2.py` | Updated version of `pcap2csv_win.py` with additional feature for viewing the urls visited. |
+| `input.pcap` | A sample Wireshark-captured PCAP file for testing the upload functionality. |
+
+
+Note: Run realtime_sniffer.py and server.py simultaneously for live flow capture and classification.
+---
 ## Notes
 
 * Ensure **Python 3** is installed and accessible (`py -3` on Windows, `python3` on macOS/Linux).

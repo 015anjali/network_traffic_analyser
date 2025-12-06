@@ -28,7 +28,7 @@ class PythonClient {
     const outputFile = path.join(this.dataPath, `liveflows_${sessionId}.csv`);
 
     console.log(`[LIVE] Starting capture for session: ${sessionId}`);
-    const pythonProcess = this.spawnPython(['pcap2csv_win_new.py', '--live', '--iface', iface, '-o', outputFile], this.workerPath);
+    const pythonProcess = spawn(this.pcapExePath, ['--live', '--iface', iface, '-o', outputFile], { cwd: this.workerPath });
 
     this.activeSessions.set(sessionId, { process: pythonProcess, outputFile, config, startTime: new Date(), status: 'running' });
 

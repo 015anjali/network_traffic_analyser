@@ -46,14 +46,6 @@ HOW TO USE:
 
 
 
-TROUBLESHOOTING:
-If you see "pcap2csv_win_v2.exe not found":
-- Make sure both files are in the same folder
-- Or rebuild with the build script
-
-For admin permissions (if needed):
-- Right-click → "Run as administrator"
-
 SERVER SETUP:
 The server should be running at: http://localhost:5000
 

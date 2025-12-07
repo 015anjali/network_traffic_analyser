@@ -1,0 +1,57 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+*.egg-info/
+*.egg
+
+# Virtual Environment
+venv/
+env/
+ENV/
+env.bak/
+venv.bak/
+
+# PyInstaller
+build/
+dist/
+*.spec
+
+# Executables
+*.exe
+
+# IDE
+.vscode/
+.idea/
+*.iml
+
+# OS
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Project files
+offline_data/
+*.pcap
+*.pcapng
+*.csv
+*.json
+*.db
+*.log
+
+# Environment
+.env
+.env.*
+!.env.example
+
+# Models (large files)
+models/*.pkl
+models/*.joblib
+
+# Temporary
+tmp/
+temp/
+*.tmp
+*.temp

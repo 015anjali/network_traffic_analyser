@@ -5,9 +5,9 @@ HOW TO SETUP:
 3. Run pyinstaller pcap2csv_win_v2.py   (pcap2csv_win_v2.exe will be formed in dist folder)
 4. Copy the above exe to network application folder
 5. Run python build_network_monitor.py
-6. Create env and add MONGO_DB Connection String
-6. Run python flow_server.py
-7. Run the client
+6. Create env and add MONGO DB Connection String (MONGO_URI=" ")
+7. Run python flow_server.py
+8. Run the client
 # Option A: Double-click in File Explorer
 # Navigate to dist/ folder and double-click NetworkFlowMonitor.exe
 

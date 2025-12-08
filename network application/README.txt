@@ -2,8 +2,8 @@
 HOW TO SETUP:
 1. Activate venv
 2. pip install -r requirements.txt
-3. Run pyinstaller pcap2csv_win_v2.py   (pcap2csv_win_v2.exe will be formed in dist folder)
-4. Copy the above exe to network application folder
+3. Run pyinstaller --onefile pcap2csv_win_v2.py --name pcap2csv_win_v2
+4. Run copy dist\pcap2csv_win_v2.exe . 
 5. Run python build_network_monitor.py
 6. Create env and add MONGO DB Connection String (MONGO_URI=" ")
 7. Run python flow_server.py

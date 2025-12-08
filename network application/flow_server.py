@@ -8,22 +8,16 @@ import json
 from typing import List, Dict
 import uuid
 import hashlib
-from dotenv import load_dotenv  # <-- ADD THIS
+from dotenv import load_dotenv  
 
 # Load environment variables from .env file
 load_dotenv() 
 
 app = FastAPI(title="Network Flow Server")
 
-# # MongoDB Configuration
-# MONGO_URI = os.getenv("MONGO_URI", "mongodb://localhost:27017")
-# client = AsyncIOMotorClient(MONGO_URI, serverSelectionTimeoutMS=5000)
-# db = client.flowdb
-# flows_collection = db.flows
-# devices_collection = db.devices
 
 #---------- MongoDB Atlas Async Setup ----------
-MONGO_URI = os.getenv("MONGO_URI")  # Now this will load from .env
+MONGO_URI = os.getenv("MONGO_URI")  
 
 if not MONGO_URI:
     print("ERROR: MONGO_URI not found in environment variables!")
@@ -34,9 +28,9 @@ print(f"Connecting to MongoDB: {MONGO_URI[:50]}...")
 
 try:
     client = AsyncIOMotorClient(MONGO_URI, serverSelectionTimeoutMS=10000)
-    print("✓ MongoDB connection established")
+    print("MongoDB connection established")
 except Exception as e:
-    print(f"✗ MongoDB connection failed: {e}")
+    print(f"MongoDB connection failed: {e}")
     exit(1)
 
 db = client.flowdb
@@ -207,7 +201,7 @@ async def get_stats():
     flow_count = await flows_collection.count_documents({})
     
     # Get active devices (seen in last 5 minutes)
-    five_min_ago = datetime.utcnow() - asyncio.timeout(300)
+    five_min_ago = datetime.utcnow() - asyncio.timedelta(minutes=5)
     active_devices = await devices_collection.count_documents({
         "last_seen": {"$gte": five_min_ago}
     })

@@ -11,6 +11,18 @@ import socket
 from threading import Lock
 import re
 import socket
+# Add these imports after existing imports
+import requests
+import json
+import threading
+from datetime import datetime
+
+# Add these configuration variables after imports
+API_URL = "http://localhost:5000/api/batch-flows"  # Your server endpoint
+DEVICE_ID = "default_device"  # Or generate dynamically
+BATCH_SIZE = 50  # Send batches of 50 flows
+batch_buffer = []
+batch_lock = threading.Lock()
 
 # Add these after other global variables
 flows_lock = Lock()
@@ -116,6 +128,48 @@ def get_l4_info(pkt):
 def make_bi_key(proto,a_ip,a_port,b_ip,b_port):
     a=(a_ip,a_port); b=(b_ip,b_port)
     return (proto,a,b) if a<=b else (proto,b,a)
+
+
+def send_batch_to_server(batch_data):
+    """Send batch of flows to the server"""
+    if not batch_data:
+        return
+    
+    try:
+        payload = {
+            "device_id": DEVICE_ID,
+            "flows": batch_data,
+            "timestamp": datetime.now().isoformat()
+        }
+        
+        response = requests.post(
+            API_URL,
+            json=payload,
+            timeout=10
+        )
+        
+        if response.status_code == 200:
+            print(f"[API] ✓ Sent {len(batch_data)} flows to server")
+        else:
+            print(f"[API] ✗ Error {response.status_code}: {response.text}")
+            # Optionally save failed batch for retry
+            save_failed_batch(batch_data)
+    
+    except Exception as e:
+        print(f"[API] ✗ Connection error: {e}")
+        save_failed_batch(batch_data)
+
+def save_failed_batch(batch_data):
+    """Save failed batch for retry later"""
+    try:
+        os.makedirs("failed_batches", exist_ok=True)
+        filename = f"batch_{int(time.time())}.json"
+        with open(os.path.join("failed_batches", filename), 'w') as f:
+            json.dump(batch_data, f)
+        print(f"  ↳ Saved for retry: {filename}")
+    except:
+        pass
+
 
 # ---------- main flow building ----------
 def process_packet(src,dst,sport,dport,proto,ts,length,flags):
@@ -277,149 +331,252 @@ def handle_packet(pkt):
                     # Also map IP to hostname for correlation
                     ip_to_hostname[ip.dst] = url.split('//')[-1].split('/')[0]
 
-
-def dump_flows_to_csv(filename):
-    headers=[
-        "FlowID","SrcIP","DstIP","SrcPort","DstPort","Protocol",
-        "FlowDuration",
-        "TotFwdPkts","TotBwdPkts","TotLenFwd","TotLenBwd",
-        "FwdPktLenMean","FwdPktLenStd","FwdPktLenMin","FwdPktLenMax",
-        "BwdPktLenMean","BwdPktLenStd","BwdPktLenMin","BwdPktLenMax",
-        "FlowIATMean","FlowIATStd","FlowIATMin","FlowIATMax",
-        "FwdIATMean","FwdIATStd","FwdIATMin","FwdIATMax",
-        "BwdIATMean","BwdIATStd","BwdIATMin","BwdIATMax",
-        "TotalFwdIAT","TotalBwdIAT",
-        "TotalBytes","TotalPackets",
-        "BytesPerSec","PktsPerSec","FwdBwdPktRatio","FwdBwdByteRatio",
-        "FwdPktLenPct25","FwdPktLenPct50","FwdPktLenPct75","FwdPktLenPct90",
-        "BwdPktLenPct25","BwdPktLenPct50","BwdPktLenPct75","BwdPktLenPct90",
-        "FlowIAT25","FlowIAT50","FlowIAT75","FlowIAT90",
-        "FwdIAT25","FwdIAT50","FwdIAT75","FwdIAT90",
-        "BwdIAT25","BwdIAT50","BwdIAT75","BwdIAT90",
-        "Fwd_SYN","Fwd_FIN","Fwd_RST","Fwd_PSH","Fwd_ACK","Fwd_URG",
-        "Bwd_SYN","Bwd_FIN","Bwd_RST","Bwd_PSH","Bwd_ACK","Bwd_URG",
-        "MinActive","MeanActive","MaxActive","StdActive",
-        "MinIdle","MeanIdle","MaxIdle","StdIdle",
-        "SrcPortCat","DstPortCat",
-        "URLs"  # <--- full URLs instead of just hosts
-    ]
+def process_and_send_flows():
+    """Process flows and send to server - WITH ALL ML FEATURES"""
     snapshot = list(flows.items())
-    with open(filename,"w",newline="",encoding="utf-8") as fcsv:
-        w=csv.DictWriter(fcsv,fieldnames=headers); w.writeheader()
-        for idx,(key,fl) in enumerate(snapshot,start=1):
-            dur=max(0.0,fl["end"]-fl["start"])
-            all_times=sorted(fl["fwd_times"]+fl["bwd_times"])
-            flow_iat=iat_stats(all_times)
-            fwd_iat=iat_stats(fl["fwd_times"])
-            bwd_iat=iat_stats(fl["bwd_times"])
-            fwd_len_p=[pctile(fl["fwd_lens"],q) for q in (25,50,75,90)]
-            bwd_len_p=[pctile(fl["bwd_lens"],q) for q in (25,50,75,90)]
-            flow_iat_p=iat_all(all_times)
-            fwd_iat_p=iat_all(fl["fwd_times"])
-            bwd_iat_p=iat_all(fl["bwd_times"])
-            total_bytes=sum(fl["fwd_lens"])+sum(fl["bwd_lens"])
-            total_pkts=len(fl["fwd_lens"])+len(fl["bwd_lens"])
-            bytes_per_sec=safe_div(total_bytes,dur)
-            pkts_per_sec=safe_div(total_pkts,dur)
-            pkt_ratio=safe_div(len(fl["fwd_lens"]),len(fl["bwd_lens"]))
-            byte_ratio=safe_div(sum(fl["fwd_lens"]),sum(fl["bwd_lens"]))
-            total_fiat=total_iat(fl["fwd_times"])
-            total_biat=total_iat(fl["bwd_times"])
-            act_idle=active_idle_stats(all_times)
-            def count_flags(flags_list,mask): return sum(1 for f in flags_list if f & mask)
-            fwd_syn=count_flags(fl["fwd_flags"],0x02)
-            fwd_fin=count_flags(fl["fwd_flags"],0x01)
-            fwd_rst=count_flags(fl["fwd_flags"],0x04)
-            fwd_psh=count_flags(fl["fwd_flags"],0x08)
-            fwd_ack=count_flags(fl["fwd_flags"],0x10)
-            fwd_urg=count_flags(fl["fwd_flags"],0x20)
-            bwd_syn=count_flags(fl["bwd_flags"],0x02)
-            bwd_fin=count_flags(fl["bwd_flags"],0x01)
-            bwd_rst=count_flags(fl["bwd_flags"],0x04)
-            bwd_psh=count_flags(fl["bwd_flags"],0x08)
-            bwd_ack=count_flags(fl["bwd_flags"],0x10)
-            bwd_urg=count_flags(fl["bwd_flags"],0x20)
-            def port_cat(p):
-                if p in (80,443): return "Web"
-                if p in (1935,554,8554): return "Multimedia"
-                if p in (5222,5228,443): return "Social"
-                if p<1024: return "System"
-                return "Other"
-            row={
-                "FlowID":idx,
-                "SrcIP":fl["src"],"DstIP":fl["dst"],
-                "SrcPort":fl["sport"],"DstPort":fl["dport"],"Protocol":fl["proto"],
-                "FlowDuration":dur,
-                "TotFwdPkts":len(fl["fwd_lens"]), "TotBwdPkts":len(fl["bwd_lens"]),
-                "TotLenFwd":sum(fl["fwd_lens"]), "TotLenBwd":sum(fl["bwd_lens"]),
-                "FwdPktLenMean":safe_mean(fl["fwd_lens"]), "FwdPktLenStd":safe_std(fl["fwd_lens"]),
-                "FwdPktLenMin":min(fl["fwd_lens"],default=0), "FwdPktLenMax":max(fl["fwd_lens"],default=0),
-                "BwdPktLenMean":safe_mean(fl["bwd_lens"]), "BwdPktLenStd":safe_std(fl["bwd_lens"]),
-                "BwdPktLenMin":min(fl["bwd_lens"],default=0), "BwdPktLenMax":max(fl["bwd_lens"],default=0),
-                "FlowIATMean":flow_iat[0],"FlowIATStd":flow_iat[1],
-                "FlowIATMin":flow_iat[2],"FlowIATMax":flow_iat[3],
-                "FwdIATMean":fwd_iat[0],"FwdIATStd":fwd_iat[1],
-                "FwdIATMin":fwd_iat[2],"FwdIATMax":fwd_iat[3],
-                "BwdIATMean":bwd_iat[0],"BwdIATStd":bwd_iat[1],
-                "BwdIATMin":bwd_iat[2],"BwdIATMax":bwd_iat[3],
-                "TotalFwdIAT":total_fiat,"TotalBwdIAT":total_biat,
-                "TotalBytes":total_bytes,"TotalPackets":total_pkts,
-                "BytesPerSec":bytes_per_sec,"PktsPerSec":pkts_per_sec,
-                "FwdBwdPktRatio":pkt_ratio,"FwdBwdByteRatio":byte_ratio,
-                "FwdPktLenPct25":fwd_len_p[0],"FwdPktLenPct50":fwd_len_p[1],
-                "FwdPktLenPct75":fwd_len_p[2],"FwdPktLenPct90":fwd_len_p[3],
-                "BwdPktLenPct25":bwd_len_p[0],"BwdPktLenPct50":bwd_len_p[1],
-                "BwdPktLenPct75":bwd_len_p[2],"BwdPktLenPct90":bwd_len_p[3],
-                "FlowIAT25":flow_iat_p[4],"FlowIAT50":flow_iat_p[5],
-                "FlowIAT75":flow_iat_p[6],"FlowIAT90":flow_iat_p[7],
-                "FwdIAT25":fwd_iat_p[4],"FwdIAT50":fwd_iat_p[5],
-                "FwdIAT75":fwd_iat_p[6],"FwdIAT90":fwd_iat_p[7],
-                "BwdIAT25":bwd_iat_p[4],"BwdIAT50":bwd_iat_p[5],
-                "BwdIAT75":bwd_iat_p[6],"BwdIAT90":bwd_iat_p[7],
-                "Fwd_SYN":fwd_syn,"Fwd_FIN":fwd_fin,"Fwd_RST":fwd_rst,
-                "Fwd_PSH":fwd_psh,"Fwd_ACK":fwd_ack,"Fwd_URG":fwd_urg,
-                "Bwd_SYN":bwd_syn,"Bwd_FIN":bwd_fin,"Bwd_RST":bwd_rst,
-                "Bwd_PSH":bwd_psh,"Bwd_ACK":bwd_ack,"Bwd_URG":bwd_urg,
-                "MinActive":act_idle[0],"MeanActive":act_idle[1],
-                "MaxActive":act_idle[2],"StdActive":act_idle[3],
-                "MinIdle":act_idle[4],"MeanIdle":act_idle[5],
-                "MaxIdle":act_idle[6],"StdIdle":act_idle[7],
-                "SrcPortCat":port_cat(fl["sport"]), "DstPortCat":port_cat(fl["dport"]),
-                "URLs":",".join(fl.get("urls",[]))
-            }
-            w.writerow(row)
-    print(f"[+] Updated {filename} with {len(flows)} flows")
+    if not snapshot:
+        return
+    
+    batch_data = []
+    
+    for idx, (key, fl) in enumerate(snapshot, start=1):
+        # Calculate all flow features
+        dur = max(0.0, fl["end"] - fl["start"])
+        all_times = sorted(fl["fwd_times"] + fl["bwd_times"])
+        flow_iat = iat_stats(all_times)
+        fwd_iat = iat_stats(fl["fwd_times"])
+        bwd_iat = iat_stats(fl["bwd_times"])
+        fwd_len_p = [pctile(fl["fwd_lens"], q) for q in (25, 50, 75, 90)]
+        bwd_len_p = [pctile(fl["bwd_lens"], q) for q in (25, 50, 75, 90)]
+        flow_iat_p = iat_all(all_times)
+        fwd_iat_p = iat_all(fl["fwd_times"])
+        bwd_iat_p = iat_all(fl["bwd_times"])
+        total_bytes = sum(fl["fwd_lens"]) + sum(fl["bwd_lens"])
+        total_pkts = len(fl["fwd_lens"]) + len(fl["bwd_lens"])
+        bytes_per_sec = safe_div(total_bytes, dur)
+        pkts_per_sec = safe_div(total_pkts, dur)
+        pkt_ratio = safe_div(len(fl["fwd_lens"]), len(fl["bwd_lens"]))
+        byte_ratio = safe_div(sum(fl["fwd_lens"]), sum(fl["bwd_lens"]))
+        total_fiat = total_iat(fl["fwd_times"])
+        total_biat = total_iat(fl["bwd_times"])
+        act_idle = active_idle_stats(all_times)
+        
+        def count_flags(flags_list, mask): 
+            return sum(1 for f in flags_list if f & mask)
+        
+        fwd_syn = count_flags(fl["fwd_flags"], 0x02)
+        fwd_fin = count_flags(fl["fwd_flags"], 0x01)
+        fwd_rst = count_flags(fl["fwd_flags"], 0x04)
+        fwd_psh = count_flags(fl["fwd_flags"], 0x08)
+        fwd_ack = count_flags(fl["fwd_flags"], 0x10)
+        fwd_urg = count_flags(fl["fwd_flags"], 0x20)
+        bwd_syn = count_flags(fl["bwd_flags"], 0x02)
+        bwd_fin = count_flags(fl["bwd_flags"], 0x01)
+        bwd_rst = count_flags(fl["bwd_flags"], 0x04)
+        bwd_psh = count_flags(fl["bwd_flags"], 0x08)
+        bwd_ack = count_flags(fl["bwd_flags"], 0x10)
+        bwd_urg = count_flags(fl["bwd_flags"], 0x20)
+        
+        def port_cat(p):
+            if p in (80, 443): return "Web"
+            if p in (1935, 554, 8554): return "Multimedia"
+            if p in (5222, 5228, 443): return "Social"
+            if p < 1024: return "System"
+            return "Other"
+        
+        # ========== CRITICAL: ADD BACK ALL ML FEATURES ==========
+        flow_data = {
+            # Basic identifiers
+            "flow_id": f"flow_{int(time.time())}_{idx}",
+            "src_ip": fl["src"],
+            "dst_ip": fl["dst"],
+            "src_port": fl["sport"],
+            "dst_port": fl["dport"],
+            "protocol": fl["proto"],
+            
+            # Duration and packet counts
+            "FlowDuration": dur,
+            "TotFwdPkts": len(fl["fwd_lens"]),
+            "TotBwdPkts": len(fl["bwd_lens"]),
+            "TotLenFwd": sum(fl["fwd_lens"]),
+            "TotLenBwd": sum(fl["bwd_lens"]),
+            "TotalBytes": total_bytes,
+            "TotalPackets": total_pkts,
+            
+            # Packet length statistics
+            "FwdPktLenMean": safe_mean(fl["fwd_lens"]),
+            "FwdPktLenStd": safe_std(fl["fwd_lens"]),
+            "FwdPktLenMin": min(fl["fwd_lens"], default=0),
+            "FwdPktLenMax": max(fl["fwd_lens"], default=0),
+            "BwdPktLenMean": safe_mean(fl["bwd_lens"]),
+            "BwdPktLenStd": safe_std(fl["bwd_lens"]),
+            "BwdPktLenMin": min(fl["bwd_lens"], default=0),
+            "BwdPktLenMax": max(fl["bwd_lens"], default=0),
+            
+            # Packet length percentiles (MISSING - ADD BACK!)
+            "FwdPktLenPct25": fwd_len_p[0],
+            "FwdPktLenPct50": fwd_len_p[1],
+            "FwdPktLenPct75": fwd_len_p[2],
+            "FwdPktLenPct90": fwd_len_p[3],
+            "BwdPktLenPct25": bwd_len_p[0],
+            "BwdPktLenPct50": bwd_len_p[1],
+            "BwdPktLenPct75": bwd_len_p[2],
+            "BwdPktLenPct90": bwd_len_p[3],
+            
+            # IAT statistics
+            "FlowIATMean": flow_iat[0],
+            "FlowIATStd": flow_iat[1],
+            "FlowIATMin": flow_iat[2],
+            "FlowIATMax": flow_iat[3],
+            "FwdIATMean": fwd_iat[0],
+            "FwdIATStd": fwd_iat[1],
+            "FwdIATMin": fwd_iat[2],
+            "FwdIATMax": fwd_iat[3],
+            "BwdIATMean": bwd_iat[0],
+            "BwdIATStd": bwd_iat[1],
+            "BwdIATMin": bwd_iat[2],
+            "BwdIATMax": bwd_iat[3],
+            
+            # IAT percentiles (MISSING - ADD BACK!)
+            "FlowIAT25": flow_iat_p[4],
+            "FlowIAT50": flow_iat_p[5],
+            "FlowIAT75": flow_iat_p[6],
+            "FlowIAT90": flow_iat_p[7],
+            "FwdIAT25": fwd_iat_p[4],
+            "FwdIAT50": fwd_iat_p[5],
+            "FwdIAT75": fwd_iat_p[6],
+            "FwdIAT90": fwd_iat_p[7],
+            "BwdIAT25": bwd_iat_p[4],
+            "BwdIAT50": bwd_iat_p[5],
+            "BwdIAT75": bwd_iat_p[6],
+            "BwdIAT90": bwd_iat_p[7],
+            
+            # Total IAT
+            "TotalFwdIAT": total_fiat,
+            "TotalBwdIAT": total_biat,
+            
+            # Rate calculations
+            "BytesPerSec": bytes_per_sec,
+            "PktsPerSec": pkts_per_sec,
+            "FwdBwdPktRatio": pkt_ratio,
+            "FwdBwdByteRatio": byte_ratio,
+            
+            # TCP Flags (MISSING - ADD BACK!)
+            "Fwd_SYN": fwd_syn,
+            "Fwd_FIN": fwd_fin,
+            "Fwd_RST": fwd_rst,
+            "Fwd_PSH": fwd_psh,
+            "Fwd_ACK": fwd_ack,
+            "Fwd_URG": fwd_urg,
+            "Bwd_SYN": bwd_syn,
+            "Bwd_FIN": bwd_fin,
+            "Bwd_RST": bwd_rst,
+            "Bwd_PSH": bwd_psh,
+            "Bwd_ACK": bwd_ack,
+            "Bwd_URG": bwd_urg,
+            
+            # Active/Idle statistics 
+            "MinActive": act_idle[0],
+            "MeanActive": act_idle[1],
+            "MaxActive": act_idle[2],
+            "StdActive": act_idle[3],
+            "MinIdle": act_idle[4],
+            "MeanIdle": act_idle[5],
+            "MaxIdle": act_idle[6],
+            "StdIdle": act_idle[7],
+            
+            # Port categories
+            # "SrcPortCat": port_cat(fl["sport"]),
+            # "DstPortCat": port_cat(fl["dport"]),
+            
+            # URLs
+            "URLs": ",".join(fl.get("urls", [])),  # Keep as comma-separated string
+            
+            # Additional fields your model might need
+            "FlowIATMin": min(all_times) if all_times else 0,
+            "FlowIATMax": max(all_times) if all_times else 0,
+            "FwdIATMin": min(fl["fwd_times"]) if fl["fwd_times"] else 0,
+            "FwdIATMax": max(fl["fwd_times"]) if fl["fwd_times"] else 0,
+            "BwdIATMin": min(fl["bwd_times"]) if fl["bwd_times"] else 0,
+            "BwdIATMax": max(fl["bwd_times"]) if fl["bwd_times"] else 0,
+            
+            # Metadata
+            "timestamp": datetime.now().isoformat(),
+            "device_id": DEVICE_ID,
+        }
+        
+        batch_data.append(flow_data)
+        
+        # Send batch when size is reached
+        if len(batch_data) >= BATCH_SIZE:
+            with batch_lock:
+                send_batch_to_server(batch_data.copy())
+                batch_data.clear()
+    
+    # Send any remaining flows
+    if batch_data:
+        with batch_lock:
+            send_batch_to_server(batch_data.copy())
+    
+    print(f"[+] Processed {len(snapshot)} flows (sent to server)")
 
-def periodic_dump(filename,interval=30):
+def periodic_send(interval=30):
+    """Periodically send flows to server"""
     while running:
         time.sleep(interval)
-        dump_flows_to_csv(filename)
+        process_and_send_flows()
 
-def signal_handler(sig,frame):
+def signal_handler(sig, frame):
     global running
-    running=False
+    running = False
     print("\n[!] Stopping capture...")
-    dump_flows_to_csv("final_liveflows.csv")
+    
+    # Send final flows before exit
+    process_and_send_flows()
+    
+    # Clear flows after sending
+    flows.clear()
+    
+    print("[+] Capture stopped. All flows sent to server.")
     sys.exit(0)
 
 def main():
-    ap=argparse.ArgumentParser(description="PCAP/Live -> CSV (CIC-like flow features + URL/SNI)")
-    ap.add_argument("-i","--input",help="Input PCAP file")
-    ap.add_argument("-o","--output",required=True,help="Output CSV file")
-    ap.add_argument("--live",action="store_true",help="Enable live capture mode")
-    ap.add_argument("--iface",default="Wi-Fi",help="Network interface for live capture")
-    args=ap.parse_args()
-
+    ap = argparse.ArgumentParser(description="PCAP/Live -> Server (CIC-like flow features + URL/SNI)")
+    ap.add_argument("-i", "--input", help="Input PCAP file")
+    ap.add_argument("--live", action="store_true", help="Enable live capture mode")
+    ap.add_argument("--iface", default="Wi-Fi", help="Network interface for live capture")
+    ap.add_argument("--server", default="http://localhost:5000", help="Server URL")
+    ap.add_argument("--device-id", help="Device ID")
+    args = ap.parse_args()
+    
+    # Update configuration from arguments
+    global API_URL, DEVICE_ID
+    API_URL = f"{args.server.rstrip('/')}/api/batch-flows"
+    if args.device_id:
+        DEVICE_ID = args.device_id
+    
     if args.live:
-        signal.signal(signal.SIGINT,signal_handler)
+        signal.signal(signal.SIGINT, signal_handler)
         print(f"[*] Sniffing on {args.iface}... Press Ctrl+C to stop.")
-        threading.Thread(target=periodic_dump,args=(args.output,),daemon=True).start()
-        sniff(iface=args.iface,prn=handle_packet,store=False)
+        print(f"[*] Sending to server: {API_URL}")
+        print(f"[*] Device ID: {DEVICE_ID}")
+        
+        threading.Thread(target=periodic_send, daemon=True).start()
+        sniff(iface=args.iface, prn=handle_packet, store=False)
     else:
+        if not args.input:
+            print("Error: Input PCAP file required with -i")
+            return
+        
+        print(f"[*] Processing PCAP file: {args.input}")
+        print(f"[*] Sending to server: {API_URL}")
+        
         with PcapReader(args.input) as pr:
             for pkt in pr:
                 handle_packet(pkt)
-        dump_flows_to_csv(args.output)
-
+        
+        # Process and send all flows
+        process_and_send_flows()
+        print("[+] PCAP processing complete!")
 if __name__=="__main__":
     main()

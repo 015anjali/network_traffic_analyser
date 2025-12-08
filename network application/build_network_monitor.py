@@ -30,6 +30,7 @@ def build_executable():
             print(f"Warning: {src} not found!")
     
     # Hidden imports (packages PyInstaller might miss)
+    # Add these to hidden_imports:
     hidden_imports = [
         'scapy',
         'scapy.layers',
@@ -39,12 +40,15 @@ def build_executable():
         'scapy.sendrecv',
         'scapy.utils',
         'psutil',
-        'requests',
+        'requests',           # Already here
         'urllib3',
         'chardet',
         'idna',
         'numpy',
         'tkinter',
+        'json',              # Add this
+        'hashlib',           # Add this
+        'datetime',          # Add this
     ]
     
     hidden_args = []
@@ -89,8 +93,7 @@ def build_executable():
     print("=" * 50)
     print("1. Copy NetworkFlowMonitor.exe to any Windows machine")
     print("2. Double-click to run")
-    print("3. No Python or dependencies needed!")
-    print("4. It will automatically:")
+    print("3. It will automatically:")
     print("   - Find network interfaces")
     print("   - Capture traffic")
     print("   - Extract flows and URLs")

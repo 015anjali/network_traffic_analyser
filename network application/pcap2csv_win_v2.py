@@ -11,7 +11,6 @@ import socket
 from threading import Lock
 import re
 import socket
-# Add these imports after existing imports
 import requests
 import json
 import threading
@@ -87,27 +86,58 @@ def total_iat(times):
     gaps=[t2-t1 for t1,t2 in zip(times[:-1],times[1:])]
     return sum(gaps)
 
-def active_idle_stats(times,threshold=1.0):
-    if len(times)<2: return (0,0,0,0,0,0,0,0)
-    times_sorted=sorted(times)
-    gaps=[t2-t1 for t1,t2 in zip(times_sorted[:-1],times_sorted[1:])]
-    actives,idles=[],[]
-    cur_start=times_sorted[0]
-    for g in gaps:
-        if g<=threshold: continue
-        actives.append(times_sorted[gaps.index(g)]-cur_start)
-        idles.append(g)
-        cur_start=times_sorted[gaps.index(g)+1]
-    if cur_start!=times_sorted[-1]:
-        actives.append(times_sorted[-1]-cur_start)
-    def stats(lst):
-        return (min(lst) if lst else 0,
-                safe_mean(lst) if lst else 0,
-                max(lst) if lst else 0,
-                safe_std(lst) if lst else 0)
-    min_act,mean_act,max_act,std_act=stats(actives)
-    min_idle,mean_idle,max_idle,std_idle=stats(idles)
-    return (min_act,mean_act,max_act,std_act,min_idle,mean_idle,max_idle,std_idle)
+# def active_idle_stats(times,threshold=1.0):
+#     if len(times)<2: return (0,0,0,0,0,0,0,0)
+#     times_sorted=sorted(times)
+#     gaps=[t2-t1 for t1,t2 in zip(times_sorted[:-1],times_sorted[1:])]
+#     actives,idles=[],[]
+#     cur_start=times_sorted[0]
+#     for g in gaps:
+#         if g<=threshold: continue
+#         actives.append(times_sorted[gaps.index(g)]-cur_start)
+#         idles.append(g)
+#         cur_start=times_sorted[gaps.index(g)+1]
+#     if cur_start!=times_sorted[-1]:
+#         actives.append(times_sorted[-1]-cur_start)
+#     def stats(lst):
+#         return (min(lst) if lst else 0,
+#                 safe_mean(lst) if lst else 0,
+#                 max(lst) if lst else 0,
+#                 safe_std(lst) if lst else 0)
+#     min_act,mean_act,max_act,std_act=stats(actives)
+#     min_idle,mean_idle,max_idle,std_idle=stats(idles)
+#     return (min_act,mean_act,max_act,std_act,min_idle,mean_idle,max_idle,std_idle)
+
+
+
+def active_idle_stats(times, threshold=1_000_000):
+    if len(times) < 2:
+        return (0,0,0,0,0,0,0,0)
+
+    times = sorted(times)
+    gaps = [t2 - t1 for t1, t2 in zip(times[:-1], times[1:])]
+
+    actives, idles = [], []
+    start = times[0]
+
+    for i, gap in enumerate(gaps):
+        if gap > threshold:
+            actives.append(times[i] - start)
+            idles.append(gap)
+            start = times[i + 1]
+
+    actives.append(times[-1] - start)
+
+    def stats(x):
+        return (
+            min(x) if x else 0,
+            safe_mean(x) if x else 0,
+            max(x) if x else 0,
+            safe_std(x) if x else 0
+        )
+
+    return (*stats(actives), *stats(idles))
+
 
 def pkt_len(pkt):
     try: return len(bytes(pkt))
@@ -201,7 +231,18 @@ def handle_packet(pkt):
         return
 
     # always process the flow
-    process_packet(ip.src,ip.dst,sport,dport,proto,float(pkt.time),pkt_len(pkt),flags)
+    # process_packet(ip.src,ip.dst,sport,dport,proto,float(pkt.time),pkt_len(pkt),flags)
+    process_packet(
+        ip.src,
+        ip.dst,
+        sport,
+        dport,
+        proto,
+        float(pkt.time) * 1_000_000,  # ← convert to microseconds
+        pkt_len(pkt),
+        flags
+    )
+
 
     url = None
     # --- Extract HTTP Host+Path ---
@@ -353,8 +394,15 @@ def process_and_send_flows():
         bwd_iat_p = iat_all(fl["bwd_times"])
         total_bytes = sum(fl["fwd_lens"]) + sum(fl["bwd_lens"])
         total_pkts = len(fl["fwd_lens"]) + len(fl["bwd_lens"])
-        bytes_per_sec = safe_div(total_bytes, dur)
-        pkts_per_sec = safe_div(total_pkts, dur)
+
+        # bytes_per_sec = safe_div(total_bytes, dur)
+        # pkts_per_sec = safe_div(total_pkts, dur)
+
+        dur_sec = dur / 1_000_000  # convert back to seconds
+        bytes_per_sec = safe_div(total_bytes, dur_sec)
+        pkts_per_sec = safe_div(total_pkts, dur_sec)
+
+
         pkt_ratio = safe_div(len(fl["fwd_lens"]), len(fl["bwd_lens"]))
         byte_ratio = safe_div(sum(fl["fwd_lens"]), sum(fl["bwd_lens"]))
         total_fiat = total_iat(fl["fwd_times"])
@@ -384,7 +432,7 @@ def process_and_send_flows():
             if p < 1024: return "System"
             return "Other"
         
-        # ========== CRITICAL: ADD BACK ALL ML FEATURES ==========
+        
         flow_data = {
             # Basic identifiers
             "flow_id": f"flow_{int(time.time())}_{idx}",
@@ -413,7 +461,7 @@ def process_and_send_flows():
             "BwdPktLenMin": min(fl["bwd_lens"], default=0),
             "BwdPktLenMax": max(fl["bwd_lens"], default=0),
             
-            # Packet length percentiles (MISSING - ADD BACK!)
+            # Packet length percentiles 
             "FwdPktLenPct25": fwd_len_p[0],
             "FwdPktLenPct50": fwd_len_p[1],
             "FwdPktLenPct75": fwd_len_p[2],
@@ -426,18 +474,18 @@ def process_and_send_flows():
             # IAT statistics
             "FlowIATMean": flow_iat[0],
             "FlowIATStd": flow_iat[1],
-            "FlowIATMin": flow_iat[2],
-            "FlowIATMax": flow_iat[3],
+            # "FlowIATMin": flow_iat[2],
+            # "FlowIATMax": flow_iat[3],
             "FwdIATMean": fwd_iat[0],
             "FwdIATStd": fwd_iat[1],
-            "FwdIATMin": fwd_iat[2],
-            "FwdIATMax": fwd_iat[3],
+            # "FwdIATMin": fwd_iat[2],
+            # "FwdIATMax": fwd_iat[3],
             "BwdIATMean": bwd_iat[0],
             "BwdIATStd": bwd_iat[1],
-            "BwdIATMin": bwd_iat[2],
-            "BwdIATMax": bwd_iat[3],
+            # "BwdIATMin": bwd_iat[2],
+            # "BwdIATMax": bwd_iat[3],
             
-            # IAT percentiles (MISSING - ADD BACK!)
+            # IAT percentiles
             "FlowIAT25": flow_iat_p[4],
             "FlowIAT50": flow_iat_p[5],
             "FlowIAT75": flow_iat_p[6],
@@ -461,7 +509,7 @@ def process_and_send_flows():
             "FwdBwdPktRatio": pkt_ratio,
             "FwdBwdByteRatio": byte_ratio,
             
-            # TCP Flags (MISSING - ADD BACK!)
+            # TCP Flags 
             "Fwd_SYN": fwd_syn,
             "Fwd_FIN": fwd_fin,
             "Fwd_RST": fwd_rst,
@@ -517,8 +565,11 @@ def process_and_send_flows():
     if batch_data:
         with batch_lock:
             send_batch_to_server(batch_data.copy())
+            
     
     print(f"[+] Processed {len(snapshot)} flows (sent to server)")
+    flows.clear()
+
 
 def periodic_send(interval=30):
     """Periodically send flows to server"""

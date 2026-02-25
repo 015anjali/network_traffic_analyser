@@ -24,4 +24,10 @@ dist-ssr
 *.sw?
 .env
 
-/uploads
+venv/
+*/venv/
+
+__pycache__/
+*.pyc 
+
+data/

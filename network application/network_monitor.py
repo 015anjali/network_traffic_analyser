@@ -108,7 +108,6 @@ class NetworkFlowMonitor:
                 print("Make sure pcap2csv_win_v2.exe is in the same directory.")
                 return False
             
-            # Build command - NO OUTPUT FILE NEEDED!
             # pcap2csv now sends directly to server
             cmd = [exe_path, "--live", "--server", SERVER_URL, "--device-id", DEVICE_ID]
             

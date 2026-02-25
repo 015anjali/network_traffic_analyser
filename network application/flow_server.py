@@ -16,6 +16,7 @@ import numpy as np
 
 # Load environment variables from .env file
 load_dotenv()
+load_dotenv()
 
 # ---------- Batch Buffer ----------
 BATCH_SIZE = 10
@@ -233,6 +234,17 @@ async def receive_batch_flows(request: Request):
                 print(f"[DEBUG] Triggering classification for batch of {len(batch)} flows")
                 asyncio.create_task(classify_and_update(batch))
 
+
+        # Add to buffer for classification
+        async with buffer_lock:
+            flow_buffer.extend(flow_documents)
+            print(f"[DEBUG] Added {len(flow_documents)} flows to buffer. Buffer size: {len(flow_buffer)}")
+            if len(flow_buffer) >= BATCH_SIZE:
+                batch = flow_buffer.copy()
+                flow_buffer.clear()
+                print(f"[DEBUG] Triggering classification for batch of {len(batch)} flows")
+                asyncio.create_task(classify_and_update(batch))
+
         # Update device stats
         await devices_collection.update_one(
             {"device_id": device_id},
@@ -241,6 +253,7 @@ async def receive_batch_flows(request: Request):
                 "$inc": {"total_flows": inserted_count}
             }
         )
+
 
         return {
             "status": "success",
@@ -322,6 +335,9 @@ if __name__ == "__main__":
     print(f"Database: flowdb")
     print(f"Collections: devices, flows")
     print(f"API: http://localhost:5000")
+    print(f"Model loaded: {model_path}")
+    print(f"Scaler loaded: {scaler_path}")
+
     print(f"Model loaded: {model_path}")
     print(f"Scaler loaded: {scaler_path}")
 

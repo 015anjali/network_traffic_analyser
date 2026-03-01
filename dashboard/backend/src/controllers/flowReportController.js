@@ -1,7 +1,10 @@
 const pythonClient = require('../services/pythonClient');
 const FlowRecord = require('../models/FlowRecord');
 
-class FlowsController {
+// Controller for flow reports extracted during live capture or analysis.
+// Provides endpoints for pagination, statistics, suspicious flows, and
+// realtime updates.  Renamed from "FlowsController" for clarity.
+class FlowReportController {
   // Get flows for a specific session
   static async getFlows(req, res) {
     try {
@@ -194,4 +197,4 @@ class FlowsController {
   }
 }
 
-module.exports = FlowsController;
+module.exports = FlowReportController;

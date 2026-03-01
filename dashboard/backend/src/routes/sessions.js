@@ -1,134 +1,23 @@
 const express = require('express');
 const { v4: uuidv4 } = require('uuid');
-const pythonClient = require('../services/pythonClient');
+const SessionController = require('../controllers/sessionController');
 
 const router = express.Router();
 
 // Start a new live capture session
-router.post('/start', async (req, res) => {
-  try {
-    const sessionId = uuidv4();
-    const config = req.body || {};
-
-    const result = await pythonClient.startLiveCapture(sessionId, config);
-    
-    res.json({
-      success: true,
-      sessionId,
-      message: 'Live capture session started',
-      config
-    });
-
-  } catch (error) {
-    console.error('Error starting session:', error);
-    res.status(500).json({
-      success: false,
-      error: 'Failed to start live capture session',
-      details: error.message
-    });
-  }
-});
+// delegate heavy lifting to controller
+router.post('/start', SessionController.startSession);
 
 // Stop a live capture session
-router.post('/:sessionId/stop', async (req, res) => {
-  try {
-    const { sessionId } = req.params;
-    
-    const result = await pythonClient.stopLiveCapture(sessionId);
-    
-    res.json({
-      success: true,
-      sessionId,
-      message: 'Live capture session stopped'
-    });
-
-  } catch (error) {
-    console.error('Error stopping session:', error);
-    res.status(500).json({
-      success: false,
-      error: 'Failed to stop live capture session',
-      details: error.message
-    });
-  }
-});
+router.post('/:sessionId/stop', SessionController.stopSession);
 
 // Get session information
-router.get('/:sessionId', (req, res) => {
-  try {
-    const { sessionId } = req.params;
-    const sessionInfo = pythonClient.getSessionInfo(sessionId);
-    
-    if (!sessionInfo) {
-      return res.status(404).json({
-        success: false,
-        error: 'Session not found'
-      });
-    }
-
-    res.json({
-      success: true,
-      session: sessionInfo
-    });
-
-  } catch (error) {
-    console.error('Error getting session info:', error);
-    res.status(500).json({
-      success: false,
-      error: 'Failed to get session information',
-      details: error.message
-    });
-  }
-});
+router.get('/:sessionId', SessionController.getSession);
 
 // Get all sessions
-router.get('/', (req, res) => {
-  try {
-    const sessions = pythonClient.getAllSessions();
-    
-    res.json({
-      success: true,
-      sessions
-    });
-
-  } catch (error) {
-    console.error('Error getting sessions:', error);
-    res.status(500).json({
-      success: false,
-      error: 'Failed to get sessions',
-      details: error.message
-    });
-  }
-});
+router.get('/', SessionController.getAllSessions);
 
 // Analyze uploaded PCAP file
-router.post('/analyze/:uploadId', async (req, res) => {
-  try {
-    const { uploadId } = req.params;
-    const { filePath } = req.body;
-
-    if (!filePath) {
-      return res.status(400).json({
-        success: false,
-        error: 'File path is required'
-      });
-    }
-
-    const result = await pythonClient.analyzePcapFile(filePath, uploadId);
-    
-    res.json({
-      success: true,
-      uploadId,
-      analysis: result
-    });
-
-  } catch (error) {
-    console.error('Error analyzing PCAP:', error);
-    res.status(500).json({
-      success: false,
-      error: 'Failed to analyze PCAP file',
-      details: error.message
-    });
-  }
-});
+router.post('/analyze/:uploadId', SessionController.analyzePcap);
 
 module.exports = router;

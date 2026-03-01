@@ -8,7 +8,8 @@ const pythonClient = require('./services/pythonClient'); // <-- added
 
 // Import routes
 const sessionRoutes = require('./routes/sessions');
-const flowRoutes = require('./routes/flows');
+// renamed for clarity, path changed accordingly
+const flowRoutes = require('./routes/flowReports');
 
 const app = express();
 
@@ -26,7 +27,7 @@ app.use('/uploads', express.static(path.join(__dirname, '..', 'uploads')));
 
 // API Routes
 app.use('/api/sessions', sessionRoutes);
-app.use('/api/flows', flowRoutes);
+app.use('/api/flows', flowRoutes); // flows endpoint now served by flowReports.js
 
 // Health check endpoint
 app.get('/api/health', (req, res) => {

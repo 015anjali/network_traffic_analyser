@@ -3,7 +3,7 @@ import uvicorn
 from motor.motor_asyncio import AsyncIOMotorClient
 from pymongo import UpdateOne
 import asyncio
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 import os
 import joblib
 import hashlib 
@@ -23,7 +23,7 @@ logger = logging.getLogger(__name__)
 
 # ---------- Configuration ----------
 BATCH_SIZE = 10
-FLUSH_INTERVAL = 5  # seconds
+FLUSH_INTERVAL = 5  
 
 # ---------- Model Configuration ----------
 class ModelConfig:
@@ -73,7 +73,6 @@ class ModelConfig:
             self.model = joblib.load(self.model_path)
             logger.info(f"Models loaded successfully from {self.script_dir / 'models'}")
             
-            # Test model with dummy data to ensure it works
             import numpy as np
             dummy_data = np.zeros((1, len(self.model_features)))
             _ = self.scaler.transform(dummy_data)
@@ -106,10 +105,10 @@ async def classify_and_update(flows):
         df = pd.DataFrame(flows)
         row_ids = df["_id"].tolist()
 
-        # Apply column mapping (same as classify_ui.py)
+        # Apply column mapping 
         df = df.rename(columns=config.column_mapping)
         
-        # Select only required features (same as classify_ui.py)
+        # Select only required features 
         df = df[config.model_features]
         
         # Data validation and cleaning
@@ -121,33 +120,29 @@ async def classify_and_update(flows):
         
         for col in iat_columns:
             if col in df.columns:
-                # Replace values that are clearly timestamps (> 1e12) with reasonable defaults
                 mask = df[col] > 1e12
                 if mask.any():
                     logger.warning(f"Found {mask.sum()} flows with extreme {col} values, fixing...")
-                    # Use median of reasonable values or default
                     reasonable_values = df[col][~mask]
                     if len(reasonable_values) > 0:
                         replacement = reasonable_values.median()
                     else:
-                        replacement = 1000  # Default 1ms
+                        replacement = 1000  
                     df.loc[mask, col] = replacement
         
         # Handle infinite and missing values
         df.replace([np.inf, -np.inf], np.nan, inplace=True)
         df.fillna(0, inplace=True)
         
-        # Additional validation - check for reasonable ranges
         for col in df.columns:
             if df[col].dtype in ['float64', 'int64']:
-                # Cap extreme values to reasonable ranges
                 if 'duration' in col.lower():
-                    df[col] = df[col].clip(upper=1e9)  # Max ~1000 seconds
+                    df[col] = df[col].clip(upper=1e9)  
                 elif 'persecond' in col.lower():
-                    df[col] = df[col].clip(upper=1e9)  # Cap packets/bytes per second
+                    df[col] = df[col].clip(upper=1e9)  
                 elif col in ['min_fiat', 'max_fiat', 'min_biat', 'max_biat', 
                            'min_flowiat', 'max_flowiat']:
-                    df[col] = df[col].clip(upper=1e6)  # Max ~1000 seconds IAT
+                    df[col] = df[col].clip(upper=1e6)  
         
         logger.info(f"Data validation completed. Shape: {df.shape}")
 
@@ -215,7 +210,6 @@ async def lifespan(app: FastAPI):
     # Initialize MongoDB connection within the event loop
     try:
         client = AsyncIOMotorClient(MONGO_URI, serverSelectionTimeoutMS=10000)
-        # Test connection
         client.admin.command('ping')
         logger.info("MongoDB connection established")
         
@@ -232,7 +226,6 @@ async def lifespan(app: FastAPI):
     
     yield
     
-    # Cleanup
     if client:
         client.close()
         logger.info("MongoDB connection closed")
@@ -275,7 +268,6 @@ async def register_device(request: Request):
         
         logger.info(f"Registering device: {device_id}")
         
-        # Update or insert device
         result = await devices_collection.update_one(
             {"device_id": device_id},
             {"$set": device_info},
@@ -404,68 +396,6 @@ async def receive_batch_flows(request: Request):
         import traceback
         logger.error(f"Traceback: {traceback.format_exc()}")
         raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
-
-# Get device info
-@app.get("/api/devices/{device_id}")
-async def get_device_info(device_id: str):
-    device = await devices_collection.find_one(
-        {"device_id": device_id},
-        {"_id": 0}
-    )
-    
-    if not device:
-        raise HTTPException(status_code=404, detail="Device not found")
-    
-    # Count flows for this device
-    flow_count = await flows_collection.count_documents({"device_id": device_id})
-    device["flow_count"] = flow_count
-    
-    return device
-
-# Get recent flows
-@app.get("/api/flows/recent")
-async def get_recent_flows(limit: int = 100, device_id: str = None):
-    query = {}
-    if device_id:
-        query["device_id"] = device_id
-    
-    cursor = flows_collection.find(
-        query,
-        {"_id": 0, "device_id": 1, "received_at": 1, "SrcIP": 1, "DstIP": 1, "Protocol": 1}
-    ).sort("received_at", -1).limit(limit)
-    
-    flows = await cursor.to_list(length=limit)
-    
-    return {
-        "count": len(flows),
-        "flows": flows
-    }
-
-# Stats endpoint
-@app.get("/api/stats")
-async def get_stats():
-    # Count total devices
-    device_count = await devices_collection.count_documents({})
-    
-    # Count total flows
-    flow_count = await flows_collection.count_documents({})
-    
-    # Get active devices (seen in last 5 minutes)
-    five_min_ago = datetime.now(timezone.utc) - timedelta(minutes=5)
-    active_devices = await devices_collection.count_documents({
-        "last_seen": {"$gte": five_min_ago}
-    })
-    
-    return {
-        "devices": {
-            "total": device_count,
-            "active": active_devices
-        },
-        "flows": {
-            "total": flow_count
-        },
-        "server_time": datetime.now(timezone.utc).isoformat()
-    }
 
 if __name__ == "__main__":
     logger.info("Starting Flow Server...")

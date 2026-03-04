@@ -1,6 +1,4 @@
 # pcap2csv_win_v2.py [Convert PCAP/Live to CSV + capture HTTP URLs & TLS SNI]
-# Minimal CIC-style flow features + Host/SNI
-# Requires: scapy[tls]
 
 import argparse, csv, math, statistics, time, threading, signal, sys, os, re
 from scapy.all import PcapReader, IP, IPv6, TCP, UDP, sniff, Raw
@@ -86,30 +84,6 @@ def total_iat(times):
     gaps=[t2-t1 for t1,t2 in zip(times[:-1],times[1:])]
     return sum(gaps)
 
-# def active_idle_stats(times,threshold=1.0):
-#     if len(times)<2: return (0,0,0,0,0,0,0,0)
-#     times_sorted=sorted(times)
-#     gaps=[t2-t1 for t1,t2 in zip(times_sorted[:-1],times_sorted[1:])]
-#     actives,idles=[],[]
-#     cur_start=times_sorted[0]
-#     for g in gaps:
-#         if g<=threshold: continue
-#         actives.append(times_sorted[gaps.index(g)]-cur_start)
-#         idles.append(g)
-#         cur_start=times_sorted[gaps.index(g)+1]
-#     if cur_start!=times_sorted[-1]:
-#         actives.append(times_sorted[-1]-cur_start)
-#     def stats(lst):
-#         return (min(lst) if lst else 0,
-#                 safe_mean(lst) if lst else 0,
-#                 max(lst) if lst else 0,
-#                 safe_std(lst) if lst else 0)
-#     min_act,mean_act,max_act,std_act=stats(actives)
-#     min_idle,mean_idle,max_idle,std_idle=stats(idles)
-#     return (min_act,mean_act,max_act,std_act,min_idle,mean_idle,max_idle,std_idle)
-
-
-
 def active_idle_stats(times, threshold=1_000_000):
     if len(times) < 2:
         return (0,0,0,0,0,0,0,0)
@@ -138,7 +112,6 @@ def active_idle_stats(times, threshold=1_000_000):
 
     return (*stats(actives), *stats(idles))
 
-
 def pkt_len(pkt):
     try: return len(bytes(pkt))
     except: return 0
@@ -158,7 +131,6 @@ def get_l4_info(pkt):
 def make_bi_key(proto,a_ip,a_port,b_ip,b_port):
     a=(a_ip,a_port); b=(b_ip,b_port)
     return (proto,a,b) if a<=b else (proto,b,a)
-
 
 def send_batch_to_server(batch_data):
     """Send batch of flows to the server"""
@@ -200,7 +172,6 @@ def save_failed_batch(batch_data):
     except:
         pass
 
-
 # ---------- main flow building ----------
 def process_packet(src,dst,sport,dport,proto,ts,length,flags):
     key=make_bi_key(proto,src,sport,dst,dport)
@@ -230,22 +201,19 @@ def handle_packet(pkt):
     if proto is None: 
         return
 
-    # always process the flow
-    # process_packet(ip.src,ip.dst,sport,dport,proto,float(pkt.time),pkt_len(pkt),flags)
     process_packet(
         ip.src,
         ip.dst,
         sport,
         dport,
         proto,
-        float(pkt.time) * 1_000_000,  # ← convert to microseconds
+        float(pkt.time) * 1_000_000,  
         pkt_len(pkt),
         flags
     )
 
 
     url = None
-    # --- Extract HTTP Host+Path ---
     try:
         if pkt.haslayer(HTTPRequest):
             http_layer = pkt[HTTPRequest]
@@ -315,12 +283,12 @@ def handle_packet(pkt):
                         name_type = raw[pos]; pos += 1
                         name_length = int.from_bytes(raw[pos:pos+2], byteorder='big'); pos += 2
                         
-                        if name_type == 0:  # host_name
+                        if name_type == 0:  
                             if pos + name_length <= len(raw):
                                 sni = raw[pos:pos+name_length].decode('utf-8', errors='ignore')
                                 if is_valid_hostname(sni):
-                                    url = f"https://{sni}/"  # Add https:// prefix
-                                    print(f"[HTTPS] Found domain: {url}")  # Debug line
+                                    url = f"https://{sni}/"  
+                                    print(f"[HTTPS] Found domain: {url}")  
                                     break
                             pos += name_length
                         else:
@@ -330,20 +298,18 @@ def handle_packet(pkt):
                     pos += ext_length
                     
         except Exception as e:
-            #print(f"TLS parsing error: {e}")
             pass
 
     # --- Enhanced TLS detection for modern sites ---
     if url is None and TCP in pkt and pkt.haslayer(Raw):
         raw = pkt[Raw].load
         try:
-            # Alternative TLS 1.3 patterns
             if len(raw) > 10:
                 # Look for TLS handshake in any position
                 for i in range(len(raw) - 10):
-                    if (raw[i] == 0x16 and  # Handshake
-                        raw[i+1] == 0x03 and  # TLS 1.x
-                        raw[i+2] in [0x01, 0x02, 0x03, 0x04]):  # TLS versions
+                    if (raw[i] == 0x16 and  
+                        raw[i+1] == 0x03 and  
+                        raw[i+2] in [0x01, 0x02, 0x03, 0x04]):  
                         
                         # Simple SNI search pattern
                         sni_pattern = b'\x00\x00'
@@ -353,23 +319,21 @@ def handle_packet(pkt):
                             if sni_pos + 5 + sni_len <= len(raw):
                                 sni = raw[sni_pos+5:sni_pos+5+sni_len].decode('utf-8', errors='ignore')
                                 if is_valid_hostname(sni):
-                                    url = f"https://{sni}/"  # Add https:// prefix
-                                    print(f"[HTTPS Alt] Found domain: {url}")  # Debug line
+                                    url = f"https://{sni}/"  
+                                    print(f"[HTTPS Alt] Found domain: {url}") 
                                     break
         except:
             pass
 
     if url:
-        # Store the full URL as-is (no domain extraction)
         if is_valid_hostname(url.split('//')[-1].split('/')[0].split(':')[0]):
             key = make_bi_key(proto, ip.src, sport, ip.dst, dport)
             with flows_lock:
                 if key in flows:
                     if "urls" not in flows[key]:
                         flows[key]["urls"] = set()
-                    flows[key]["urls"].add(url)  # Store full URL
+                    flows[key]["urls"].add(url) 
                     
-                    # Also map IP to hostname for correlation
                     ip_to_hostname[ip.dst] = url.split('//')[-1].split('/')[0]
 
 def process_and_send_flows():
@@ -395,13 +359,9 @@ def process_and_send_flows():
         total_bytes = sum(fl["fwd_lens"]) + sum(fl["bwd_lens"])
         total_pkts = len(fl["fwd_lens"]) + len(fl["bwd_lens"])
 
-        # bytes_per_sec = safe_div(total_bytes, dur)
-        # pkts_per_sec = safe_div(total_pkts, dur)
-
-        dur_sec = dur / 1_000_000  # convert back to seconds
+        dur_sec = dur / 1_000_000  
         bytes_per_sec = safe_div(total_bytes, dur_sec)
         pkts_per_sec = safe_div(total_pkts, dur_sec)
-
 
         pkt_ratio = safe_div(len(fl["fwd_lens"]), len(fl["bwd_lens"]))
         byte_ratio = safe_div(sum(fl["fwd_lens"]), sum(fl["bwd_lens"]))
@@ -425,16 +385,7 @@ def process_and_send_flows():
         bwd_ack = count_flags(fl["bwd_flags"], 0x10)
         bwd_urg = count_flags(fl["bwd_flags"], 0x20)
         
-        def port_cat(p):
-            if p in (80, 443): return "Web"
-            if p in (1935, 554, 8554): return "Multimedia"
-            if p in (5222, 5228, 443): return "Social"
-            if p < 1024: return "System"
-            return "Other"
-        
-        
         flow_data = {
-            # Basic identifiers
             "flow_id": f"flow_{int(time.time())}_{idx}",
             "src_ip": fl["src"],
             "dst_ip": fl["dst"],
@@ -442,7 +393,6 @@ def process_and_send_flows():
             "dst_port": fl["dport"],
             "protocol": fl["proto"],
             
-            # Duration and packet counts
             "FlowDuration": dur,
             "TotFwdPkts": len(fl["fwd_lens"]),
             "TotBwdPkts": len(fl["bwd_lens"]),
@@ -451,7 +401,6 @@ def process_and_send_flows():
             "TotalBytes": total_bytes,
             "TotalPackets": total_pkts,
             
-            # Packet length statistics
             "FwdPktLenMean": safe_mean(fl["fwd_lens"]),
             "FwdPktLenStd": safe_std(fl["fwd_lens"]),
             "FwdPktLenMin": min(fl["fwd_lens"], default=0),
@@ -461,7 +410,6 @@ def process_and_send_flows():
             "BwdPktLenMin": min(fl["bwd_lens"], default=0),
             "BwdPktLenMax": max(fl["bwd_lens"], default=0),
             
-            # Packet length percentiles 
             "FwdPktLenPct25": fwd_len_p[0],
             "FwdPktLenPct50": fwd_len_p[1],
             "FwdPktLenPct75": fwd_len_p[2],
@@ -471,7 +419,6 @@ def process_and_send_flows():
             "BwdPktLenPct75": bwd_len_p[2],
             "BwdPktLenPct90": bwd_len_p[3],
             
-            # IAT statistics
             "FlowIATMean": flow_iat[0],
             "FlowIATStd": flow_iat[1],
             # "FlowIATMin": flow_iat[2],
@@ -533,14 +480,9 @@ def process_and_send_flows():
             "MaxIdle": act_idle[6],
             "StdIdle": act_idle[7],
             
-            # Port categories
-            # "SrcPortCat": port_cat(fl["sport"]),
-            # "DstPortCat": port_cat(fl["dport"]),
-            
             # URLs
-            "URLs": ",".join(fl.get("urls", [])),  # Keep as comma-separated string
+            "URLs": ",".join(fl.get("urls", [])),   
             
-            # Additional fields your model might need
             "FlowIATMin": min(all_times) if all_times else 0,
             "FlowIATMax": max(all_times) if all_times else 0,
             "FwdIATMin": min(fl["fwd_times"]) if fl["fwd_times"] else 0,

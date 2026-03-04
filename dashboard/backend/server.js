@@ -6,6 +6,7 @@ const path = require('path');
 const fs = require('fs-extra');
 
 const app = require('./src/app');
+const connectDB = require('./src/config/db');
 
 const PORT = process.env.PORT || 3001;
 
@@ -21,12 +22,12 @@ global.wsConnections = new Set();
 wss.on('connection', (ws) => {
   console.log('New WebSocket connection established');
   global.wsConnections.add(ws);
-  
+
   ws.on('close', () => {
     console.log('WebSocket connection closed');
     global.wsConnections.delete(ws);
   });
-  
+
   ws.on('error', (error) => {
     console.error('WebSocket error:', error);
     global.wsConnections.delete(ws);
@@ -50,7 +51,7 @@ const ensureDirectories = async () => {
     path.join(__dirname, '..', 'models'),
     path.join(__dirname, 'uploads')
   ];
-  
+
   for (const dir of dirs) {
     await fs.ensureDir(dir);
   }
@@ -59,8 +60,9 @@ const ensureDirectories = async () => {
 // Start server
 const startServer = async () => {
   try {
+    await connectDB(); // Connected to MongoDB
     await ensureDirectories();
-    
+
     server.listen(PORT, () => {
       console.log(`🚀 Server running on port ${PORT}`);
       console.log(`📡 WebSocket server ready for real-time updates`);

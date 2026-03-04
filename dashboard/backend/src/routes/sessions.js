@@ -11,7 +11,7 @@ router.post('/start', async (req, res) => {
     const config = req.body || {};
 
     const result = await pythonClient.startLiveCapture(sessionId, config);
-    
+
     res.json({
       success: true,
       sessionId,
@@ -33,9 +33,9 @@ router.post('/start', async (req, res) => {
 router.post('/:sessionId/stop', async (req, res) => {
   try {
     const { sessionId } = req.params;
-    
+
     const result = await pythonClient.stopLiveCapture(sessionId);
-    
+
     res.json({
       success: true,
       sessionId,
@@ -57,7 +57,7 @@ router.get('/:sessionId', (req, res) => {
   try {
     const { sessionId } = req.params;
     const sessionInfo = pythonClient.getSessionInfo(sessionId);
-    
+
     if (!sessionInfo) {
       return res.status(404).json({
         success: false,
@@ -80,11 +80,35 @@ router.get('/:sessionId', (req, res) => {
   }
 });
 
+// Postman Polling Endpoint for Live Data
+router.get('/:sessionId/live-flows', async (req, res) => {
+  try {
+    const { sessionId } = req.params;
+
+    // Calls the updated MongoDB-based function
+    const result = await pythonClient.getLiveFlows(sessionId);
+
+    res.json({
+      success: true,
+      sessionId,
+      data: result
+    });
+
+  } catch (error) {
+    console.error('Error polling live flows:', error);
+    res.status(500).json({
+      success: false,
+      error: 'Failed to poll live flows',
+      details: error.message
+    });
+  }
+});
+
 // Get all sessions
 router.get('/', (req, res) => {
   try {
     const sessions = pythonClient.getAllSessions();
-    
+
     res.json({
       success: true,
       sessions
@@ -114,7 +138,7 @@ router.post('/analyze/:uploadId', async (req, res) => {
     }
 
     const result = await pythonClient.analyzePcapFile(filePath, uploadId);
-    
+
     res.json({
       success: true,
       uploadId,

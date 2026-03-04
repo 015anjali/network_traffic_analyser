@@ -359,13 +359,16 @@ const path = require('path');
 const fs = require('fs-extra');
 const os = require('os');
 
+const Flow = require('../models/MongoFlow');
+
 class PythonClient {
   constructor() {
-    this.workerPath = path.join(__dirname, '..', '..', '..', 'worker');
-    this.dataPath = path.join(__dirname, '..', '..', '..', 'data'); 
+    this.workerPath = path.join(__dirname, '..', '..', '..', '..', 'worker');
+    this.extractorPath = path.join(__dirname, '..', '..', '..', '..', 'python files');
+    this.dataPath = path.join(__dirname, '..', '..', '..', 'data');
     this.activeSessions = new Map();
 
-    const venvPath = path.join(__dirname, '..', '..', '..', 'venv');
+    const venvPath = path.join(__dirname, '..', '..', '..', '..', '.venv');
     if (os.platform() === 'win32') {
       // Use the venv Python executable
       this.pythonCmd = path.join(venvPath, 'Scripts', 'python.exe');
@@ -382,72 +385,68 @@ class PythonClient {
 
   /** ===================== LIVE CAPTURE ===================== **/
   async startLiveCapture(sessionId, config = {}) {
-    const { interface: iface = 'Wi-Fi', refreshRate = 30, lastNSeconds = null } = config;
-    const outputFile = path.join(this.dataPath, `liveflows_${sessionId}.csv`);
+    const { refreshRate = 30 } = config; // interface and lastNSeconds are handled by external python now
 
-    console.log(`[LIVE] Starting capture for session: ${sessionId}`);
-    const pythonProcess = this.spawnPython(['pcap2csv_win_new.py', '--live', '--iface', iface, '-o', outputFile], this.workerPath);
+    console.log(`[LIVE] Initializing MongoDB polling for session: ${sessionId}`);
 
-    this.activeSessions.set(sessionId, { process: pythonProcess, outputFile, config, startTime: new Date(), status: 'running' });
-
-    pythonProcess.stdout.on('data', data => console.log(`[LIVE ${sessionId}] stdout:`, data.toString()));
-    pythonProcess.stderr.on('data', data => console.error(`[LIVE ${sessionId}] stderr:`, data.toString()));
-    pythonProcess.on('close', code => {
-      console.log(`[LIVE ${sessionId}] process exited with code ${code}`);
-      const session = this.activeSessions.get(sessionId);
-      if (session) session.status = 'stopped';
+    // We don't spawn python anymore, assuming the standalone python script is already writing to DB
+    this.activeSessions.set(sessionId, {
+      config,
+      startTime: new Date(),
+      lastFetchTime: new Date(Date.now() - (refreshRate * 1000)), // Look slightly back for first fetch
+      status: 'running'
     });
 
-    this.startPeriodicClassification(sessionId, refreshRate, lastNSeconds);
-    return { success: true, sessionId, message: 'Live capture started' };
+    this.startPeriodicClassification(sessionId, refreshRate);
+    return { success: true, sessionId, message: 'Live capture MongoDB pooling started' };
   }
 
   async stopLiveCapture(sessionId) {
     const session = this.activeSessions.get(sessionId);
     if (!session) throw new Error('Session not found');
-    if (session.process && !session.process.killed) session.process.kill('SIGINT');
+
     if (session.classificationInterval) clearInterval(session.classificationInterval);
     session.status = 'stopped';
-    console.log(`[LIVE] Stopped capture for session: ${sessionId}`);
-    return { success: true, sessionId, message: 'Live capture stopped' };
+    console.log(`[LIVE] Stopped polling for session: ${sessionId}`);
+    return { success: true, sessionId, message: 'Live capture polling stopped' };
   }
   /** ===================== PERIODIC CLASSIFICATION ===================== **/
-  startPeriodicClassification(sessionId, refreshRate, lastNSeconds) {
+  startPeriodicClassification(sessionId, refreshRate) {
     const session = this.activeSessions.get(sessionId);
     if (!session) return;
 
-    console.log(`[LIVE ${sessionId}] Starting periodic classification every ${refreshRate}s`);
+    console.log(`[LIVE ${sessionId}] Starting MongoDB polling every ${refreshRate}s`);
 
-    const classifyAndBroadcast = async () => {
+    const queryAndBroadcast = async () => {
       try {
-        console.log(`[LIVE ${sessionId}] === Starting classification cycle ===`);
-        console.log(`[LIVE ${sessionId}] Checking file:`, session.outputFile);
+        console.log(`[LIVE ${sessionId}] === Fetching flows from MongoDB ===`);
 
-        // Use null for lastNSeconds to get ALL flows, not just recent ones
-        const flows = await this.classifyFlows(session.outputFile, null);
-        
-        if (!flows || flows.length === 0) {
-          console.warn(`[LIVE ${sessionId}] No flows extracted after classification`);
+        // Query MongoDB for flows after the lastFetchTime
+        const cutoffTime = session.lastFetchTime;
+        const dbFlows = await Flow.find({ createdAt: { $gt: cutoffTime } }).lean();
+
+        // Update the fetch time for the next polling cycle
+        session.lastFetchTime = new Date();
+
+        if (!dbFlows || dbFlows.length === 0) {
+          console.warn(`[LIVE ${sessionId}] No new flows found in MongoDB since ${cutoffTime.toISOString()}`);
           return;
         }
 
-        console.log(`[LIVE ${sessionId}] Raw flows from Python:`, flows.length);
+        console.log(`[LIVE ${sessionId}] Fetched ${dbFlows.length} new flows from MongoDB`);
 
-        // PROPERLY FORMAT FLOWS FOR FRONTEND
-        const formattedFlows = flows.map((flow, index) => {
-          // Extract the actual data from Python response
+        const formattedFlows = dbFlows.map((flow) => {
           return {
-            id: flow.FlowID || index,
-            srcIP: flow.SrcIP || flow.srcIP || 'Unknown',
-            dstIP: flow.DstIP || flow.dstIP || 'Unknown',
-            srcPort: flow.SrcPort || flow.srcPort || 0,
-            dstPort: flow.DstPort || flow.dstPort || 0,
-            protocol: flow.Protocol || flow.protocol || 'Unknown',
-            prediction: flow.Prediction || flow.prediction || 'Unknown',
-            bytes: flow.TotalBytes || flow.bytes || flow.TotalBytes || 0,
-            packets: flow.TotalPackets || flow.packets || flow.TotalPackets || 0,
-            // Add URL field - handle both cases
-            URLs: flow.URLs || flow.urls || ''
+            id: flow._id.toString() || flow.flow_id,
+            srcIP: flow.src_ip || 'Unknown',
+            dstIP: flow.dst_ip || 'Unknown',
+            srcPort: flow.src_port || 0,
+            dstPort: flow.dst_port || 0,
+            protocol: flow.protocol || 'Unknown',
+            prediction: flow.classification || 'Unknown',
+            bytes: flow.TotalBytes || 0,
+            packets: flow.TotalPackets || 0,
+            URLs: flow.URLs || ''
           };
         });
 
@@ -459,13 +458,13 @@ class PythonClient {
         // Broadcast to clients
         if (global.broadcast) {
           console.log(`[LIVE ${sessionId}] Broadcasting ${Math.min(formattedFlows.length, 20)} flows to clients...`);
-          
+
           global.broadcast({
             type: 'live_update',
             sessionId,
-            data: { 
+            data: {
               flows: formattedFlows.slice(-20), // Last 20 flows for display
-              stats, 
+              stats,
               timestamp: new Date().toISOString(),
               totalProcessed: formattedFlows.length
             }
@@ -479,13 +478,13 @@ class PythonClient {
       }
     };
 
-    // Start first classification after 8 seconds (give time for initial capture)
-    setTimeout(classifyAndBroadcast, 8000);
-    
-    // Set up periodic classification
-    session.classificationInterval = setInterval(classifyAndBroadcast, refreshRate * 1000);
-    
-    console.log(`[LIVE ${sessionId}] Periodic classification scheduled`);
+    // Delay start for the first fetch slightly
+    setTimeout(queryAndBroadcast, 2000);
+
+    // Set up periodic DB polling
+    session.classificationInterval = setInterval(queryAndBroadcast, refreshRate * 1000);
+
+    console.log(`[LIVE ${sessionId}] Periodic DB polling scheduled`);
   }
 
   /** ===================== ANALYZE PCAP ===================== **/
@@ -499,10 +498,16 @@ class PythonClient {
 
     const args = ['pcap2csv_win_new.py', '-i', absPath, '-o', outputFile];
     return new Promise(resolve => {
-      const pythonProcess = this.spawnPython(args, this.workerPath);
+      const pythonProcess = this.spawnPython(args, this.extractorPath);
+
+      pythonProcess.on('error', err => {
+        console.error(`[ANALYZE] Python spawn error:`, err);
+        return resolve({ success: false, uploadId, message: err.message, flows: [], stats: {}, outputFile });
+      });
+
       let stdout = '', stderr = '';
       pythonProcess.stdout.on('data', data => stdout += data.toString());
-      pythonProcess.stderr.on('data', data => stderr += data.toString()); 
+      pythonProcess.stderr.on('data', data => stderr += data.toString());
 
       pythonProcess.on('close', async (code) => {
         console.log(`[ANALYZE] Python process exited with code ${code}`);
@@ -510,36 +515,36 @@ class PythonClient {
           console.error(`[ANALYZE] Python stderr:`, stderr);
           return resolve({ success: false, uploadId, message: stderr, flows: [], stats: {}, outputFile });
         }
-          try {
-            const flows = await this.classifyFlows(outputFile);
-            if (!flows || flows.length === 0) return resolve({ success: false, uploadId, message: "No flows found", flows: [], stats: {}, outputFile });
-            
-    // PROPERLY FORMAT FLOWS FOR FRONTEND
-            const formattedFlows = flows.map((flow, index) => ({
-              id: flow.FlowID || index,
-              srcIP: flow.SrcIP || flow.srcIP || 'Unknown',
-              dstIP: flow.DstIP || flow.dstIP || 'Unknown', 
-              srcPort: flow.SrcPort || flow.srcPort || 0,
-              dstPort: flow.DstPort || flow.dstPort || 0,
-              protocol: flow.Protocol || flow.protocol || 'Unknown',
-              prediction: flow.Prediction || flow.prediction || 'Unknown',
-              bytes: flow.TotalBytes || flow.bytes || 0,
-              packets: flow.TotalPackets || flow.packets || 0,
-              URLs: flow.URLs || flow.urls || ''
-            }));
-    
-            console.log(`[ANALYZE] Formatted ${formattedFlows.length} flows for frontend`);
-            const stats = this.calculateStats(formattedFlows);
-            
-            resolve({ success: true, uploadId, flows: formattedFlows, stats, outputFile });
-          } catch (err) {
-            console.error(`[ANALYZE] Classification error:`, err);
-            resolve({ success: false, uploadId, message: err.message, flows: [], stats: {}, outputFile });
-          }
+        try {
+          const flows = await this.classifyFlows(outputFile);
+          if (!flows || flows.length === 0) return resolve({ success: false, uploadId, message: "No flows found", flows: [], stats: {}, outputFile });
+
+          // PROPERLY FORMAT FLOWS FOR FRONTEND
+          const formattedFlows = flows.map((flow, index) => ({
+            id: flow.FlowID || index,
+            srcIP: flow.SrcIP || flow.srcIP || 'Unknown',
+            dstIP: flow.DstIP || flow.dstIP || 'Unknown',
+            srcPort: flow.SrcPort || flow.srcPort || 0,
+            dstPort: flow.DstPort || flow.dstPort || 0,
+            protocol: flow.Protocol || flow.protocol || 'Unknown',
+            prediction: flow.Prediction || flow.prediction || 'Unknown',
+            bytes: flow.TotalBytes || flow.bytes || 0,
+            packets: flow.TotalPackets || flow.packets || 0,
+            URLs: flow.URLs || flow.urls || ''
+          }));
+
+          console.log(`[ANALYZE] Formatted ${formattedFlows.length} flows for frontend`);
+          const stats = this.calculateStats(formattedFlows);
+
+          resolve({ success: true, uploadId, flows: formattedFlows, stats, outputFile });
+        } catch (err) {
+          console.error(`[ANALYZE] Classification error:`, err);
+          resolve({ success: false, uploadId, message: err.message, flows: [], stats: {}, outputFile });
+        }
         // try {
         //   const flows = await this.classifyFlows(outputFile);
         //   if (!flows || flows.length === 0) return resolve({ success: false, uploadId, message: "No flows found", flows: [], stats: {}, outputFile });
-          
+
         //   // Format flows for frontend with URL support
         //   const formattedFlows = flows.map(flow => ({
         //     id: flow.FlowID || Math.random(),
@@ -553,7 +558,7 @@ class PythonClient {
         //     packets: flow.TotalPackets,
         //     URLs: flow.URLs || flow.urls || ''
         //   }));
-          
+
         //   console.log(`[ANALYZE] Flows classified: ${formattedFlows.length}`);
         //   resolve({ success: true, uploadId, flows: formattedFlows, stats: this.calculateStats(flows), outputFile });
         // } catch (err) {
@@ -561,13 +566,13 @@ class PythonClient {
         //   resolve({ success: false, uploadId, message: err.message, flows: [], stats: {}, outputFile });
         // }
       });
-    }); 
-  } 
+    });
+  }
 
   /** ===================== CLASSIFY FLOWS ===================== **/
   async classifyFlows(csvFile, lastNSeconds = null) {
     console.log(`[CLASSIFY] Starting classification for: ${csvFile}`);
-    
+
     if (!await fs.pathExists(csvFile)) {
       console.log(`[CLASSIFY] CSV file not found: ${csvFile}`);
       return [];
@@ -614,8 +619,14 @@ except Exception as e:
 
     return new Promise(resolve => {
       console.log(`[CLASSIFY] Executing Python classification code...`);
-      
+
       const pythonProcess = this.spawnPython(['-c', code], this.workerPath);
+
+      pythonProcess.on('error', err => {
+        console.error(`[CLASSIFY] Python spawn error:`, err);
+        return resolve([]);
+      });
+
       let stdout = '', stderr = '';
 
       pythonProcess.stdout.on('data', data => {
@@ -623,7 +634,7 @@ except Exception as e:
         stdout += output;
         console.log(`[PYTHON STDOUT]`, output.trim());
       });
-      
+
       pythonProcess.stderr.on('data', data => {
         const error = data.toString();
         stderr += error;
@@ -634,11 +645,11 @@ except Exception as e:
 
       pythonProcess.on('close', (code) => {
         console.log(`[CLASSIFY] Python process exited with code ${code}`);
-        
+
         try {
           // Look for the JSON between markers
           const jsonMatch = stdout.match(/===JSON_START===(.*)===JSON_END===/s);
-          
+
           if (jsonMatch && jsonMatch[1]) {
             const result = JSON.parse(jsonMatch[1].trim());
             console.log(`🎉 [CLASSIFY] SUCCESS! Parsed ${result.length} flows from Python`);
@@ -646,7 +657,7 @@ except Exception as e:
           } else {
             console.log(`[CLASSIFY] No JSON markers found in stdout`);
             console.log(`[CLASSIFY] Looking for raw JSON array...`);
-            
+
             // Fallback: look for any JSON array
             const lines = stdout.split('\n');
             for (let i = lines.length - 1; i >= 0; i--) {
@@ -691,10 +702,10 @@ except Exception as e:
       console.log('[STATS] No flows to calculate stats');
       return { totalFlows: 0, webCount: 0, multimediaCount: 0, socialCount: 0, maliciousCount: 0 };
     }
-    
+
     console.log('[STATS] Calculating stats for:', flows.length, 'flows');
     console.log('[STATS] Sample flow:', flows[0]);
-    
+
     const stats = {
       totalFlows: flows.length,
       webCount: flows.filter(f => f.prediction === 'Web').length,
@@ -702,31 +713,32 @@ except Exception as e:
       socialCount: flows.filter(f => f.prediction === 'Social Media').length,
       maliciousCount: flows.filter(f => f.prediction === 'Malicious').length
     };
-    
+
     console.log('[STATS] Calculated:', stats);
     return stats;
   }
 
-  async getLiveFlows(sessionId, lastNSeconds = null) {
+  async getLiveFlows(sessionId) {
     const session = this.activeSessions.get(sessionId);
     if (!session) throw new Error('Session not found');
-    const flows = await this.classifyFlows(session.outputFile, lastNSeconds);
-    
-    // Format flows with URL support
-    const formattedFlows = flows.map(flow => ({
-      id: flow.FlowID || Math.random(),
-      srcIP: flow.SrcIP,
-      dstIP: flow.DstIP,
-      srcPort: flow.SrcPort,
-      dstPort: flow.DstPort,
-      protocol: flow.Protocol,
-      prediction: flow.Prediction,
+
+    // In polling mode, just fetch the last 20 flows regardless of timestamp to match previous "get summary" semantics
+    const dbFlows = await Flow.find().sort({ createdAt: -1 }).limit(20).lean();
+
+    const formattedFlows = dbFlows.map(flow => ({
+      id: flow._id.toString() || flow.flow_id,
+      srcIP: flow.src_ip,
+      dstIP: flow.dst_ip,
+      srcPort: flow.src_port,
+      dstPort: flow.dst_port,
+      protocol: flow.protocol,
+      prediction: flow.classification,
       bytes: flow.TotalBytes,
       packets: flow.TotalPackets,
-      URLs: flow.URLs || flow.urls || ''
+      URLs: flow.URLs || ''
     }));
-    
-    return { flows: formattedFlows, stats: this.calculateStats(flows) };
+
+    return { flows: formattedFlows, stats: this.calculateStats(formattedFlows) };
   }
 
   getSessionInfo(sessionId) {

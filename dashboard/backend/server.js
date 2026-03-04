@@ -1,3 +1,5 @@
+// load environment variables from .env (if present)
+require('dotenv').config();
 const express = require('express');
 const cors = require('cors');
 const http = require('http');
@@ -9,6 +11,10 @@ const app = require('./src/app');
 const connectDB = require('./src/config/db');
 
 const PORT = process.env.PORT || 3001;
+
+// log environment-derived configuration for debugging
+console.log('Using PORT =', PORT);
+console.log('Using MONGO_URI =', process.env.MONGO_URI);
 
 // Create HTTP server
 const server = http.createServer(app);

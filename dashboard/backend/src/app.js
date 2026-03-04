@@ -9,12 +9,25 @@ const pythonClient = require('./services/pythonClient'); // <-- added
 // Import routes
 const sessionRoutes = require('./routes/sessions');
 const flowRoutes = require('./routes/flows');
+const deviceRoutes = require('./routes/devices');
 
 const app = express();
 
+// Global request logging middleware (FIRST - before everything)
+app.use((req, res, next) => {
+  console.log(`\n[${new Date().toISOString()}] 📬 ${req.method} ${req.path}`);
+  console.log('   Query:', req.query);
+  console.log('   Headers:', req.headers.host);
+  next();
+});
+
 // Middleware
 app.use(cors({
-  origin: ['http://localhost:5173', 'http://localhost:3000'],
+  origin: [
+    'http://localhost:5173',
+    'http://localhost:5174',
+    'http://localhost:3000'
+  ],
   credentials: true
 }));
 
@@ -25,8 +38,13 @@ app.use(express.urlencoded({ extended: true, limit: '50mb' }));
 app.use('/uploads', express.static(path.join(__dirname, '..', 'uploads')));
 
 // API Routes
+console.log('🔌 Registering API routes...');
 app.use('/api/sessions', sessionRoutes);
+console.log('✅ Sessions routes registered at /api/sessions');
 app.use('/api/flows', flowRoutes);
+console.log('✅ Flows routes registered at /api/flows');
+app.use('/api/devices', deviceRoutes);
+console.log('✅ Devices routes registered at /api/devices');
 
 // Health check endpoint
 app.get('/api/health', (req, res) => {

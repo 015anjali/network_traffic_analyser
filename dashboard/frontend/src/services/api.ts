@@ -249,6 +249,30 @@ class ApiService {
     return response.json();
   }
 
+  // Device endpoints
+  public async getAllDevices(): Promise<any> {
+    const url = `${this.baseURL}/devices`;
+    console.log('📡 API: Fetching devices from:', url);
+    try {
+      const response = await fetch(url);
+      console.log('📊 Response status:', response.status);
+      if (!response.ok) {
+        console.error('❌ Response not OK:', response.statusText);
+      }
+      const data = await response.json();
+      console.log('✅ Parsed response data:', data);
+      return data;
+    } catch (err) {
+      console.error('❌ Fetch error:', err);
+      throw err;
+    }
+  }
+
+  public async getDeviceDetails(device_id: string): Promise<any> {
+    const response = await fetch(`${this.baseURL}/devices/${device_id}`);
+    return response.json();
+  }
+
   // Health check
   public async healthCheck(): Promise<any> {
     const response = await fetch(`${this.baseURL}/health`);

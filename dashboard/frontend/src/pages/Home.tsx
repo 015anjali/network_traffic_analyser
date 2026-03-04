@@ -8,7 +8,8 @@ import {
   TrendingUp, 
   Network, 
   Clock,
-  ArrowRight 
+  ArrowRight,
+  Server 
 } from 'lucide-react';
 
 const Home = () => {
@@ -33,6 +34,13 @@ const Home = () => {
       icon: Upload,
       link: '/upload',
       color: 'from-blue-500 to-cyan-600'
+    },
+    {
+      title: 'View Devices',
+      description: 'Explore traffic by network device',
+      icon: Server,
+      link: '/devices',
+      color: 'from-purple-500 to-violet-600'
     }
   ];
 
@@ -78,7 +86,7 @@ const Home = () => {
         </div>
 
         {/* Quick Actions */}
-        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-8">
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6 mb-8">
           {quickActions.map((action, index) => (
             <motion.div
               key={action.title}

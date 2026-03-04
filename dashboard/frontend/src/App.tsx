@@ -7,6 +7,8 @@ import Home from './pages/Home';
 import Live from './pages/Live';
 import Upload from './pages/Upload';
 import History from './pages/History';
+import Devices from './pages/Devices';
+import DeviceDetails from './pages/DeviceDetails';
 
 function App() {
   const [isAuthenticated, setIsAuthenticated] = useState(false);
@@ -56,6 +58,8 @@ function App() {
               <Route path="/live" element={<Live />} />
               <Route path="/upload" element={<Upload />} />
               <Route path="/history" element={<History />} />
+              <Route path="/devices" element={<Devices />} />
+              <Route path="/devices/:device_id" element={<DeviceDetails />} />
               <Route path="*" element={<Navigate to="/" replace />} />
             </Routes>
           </AnimatePresence>

@@ -13,11 +13,12 @@ import requests
 import json
 import threading
 from datetime import datetime
+import uuid
 
 # Add these configuration variables after imports
 API_URL = "http://localhost:5000/api/batch-flows"  # Your server endpoint
-DEVICE_ID = "default_device"  # Or generate dynamically
-BATCH_SIZE = 50  # Send batches of 50 flows
+DEVICE_ID = str(uuid.getnode())  # Use same device ID as network_monitor
+BATCH_SIZE = 10  # Reduced batch size for more frequent sending
 batch_buffer = []
 batch_lock = threading.Lock()
 
@@ -513,7 +514,7 @@ def process_and_send_flows():
     flows.clear()
 
 
-def periodic_send(interval=30):
+def periodic_send(interval=10):
     """Periodically send flows to server"""
     while running:
         time.sleep(interval)
@@ -524,7 +525,14 @@ def signal_handler(sig, frame):
     running = False
     print("\n[!] Stopping capture...")
     
-    # Send final flows before exit
+    # Send any remaining flows in the batch buffer
+    with batch_lock:
+        if batch_buffer:
+            print(f"[+] Sending {len(batch_buffer)} remaining flows in batch buffer...")
+            send_batch_to_server(batch_buffer.copy())
+            batch_buffer.clear()
+    
+    # Process and send any remaining flows from the main flows dict
     process_and_send_flows()
     
     # Clear flows after sending

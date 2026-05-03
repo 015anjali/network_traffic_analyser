@@ -268,13 +268,33 @@ async def register_device(request: Request):
         
         logger.info(f"Registering device: {device_id}")
         
-        result = await devices_collection.update_one(
-            {"device_id": device_id},
-            {"$set": device_info},
-            upsert=True
-        )
+        # First check if device already exists by device_id, device_name, or ip_address
+        existing_device = await devices_collection.find_one({
+            "$or": [
+                {"device_id": device_id},
+                {"device_name": device_info["device_name"], "ip_address": device_info["ip_address"]}
+            ]
+        })
         
-        logger.info(f"Device {device_id} registered successfully. Matched: {result.matched_count}, Modified: {result.modified_count}, Upserted: {result.upserted_id}")
+        if existing_device:
+            # Update existing device with new device_id if different
+            result = await devices_collection.update_one(
+                {"_id": existing_device["_id"]},
+                {"$set": {
+                    "device_id": device_id,  # Ensure consistent device_id
+                    "last_seen": datetime.now(timezone.utc),
+                    "status": "active"
+                }}
+            )
+            logger.info(f"Updated existing device {device_id}. Matched: {result.matched_count}, Modified: {result.modified_count}")
+        else:
+            # Insert new device
+            result = await devices_collection.update_one(
+                {"device_id": device_id},
+                {"$set": device_info},
+                upsert=True
+            )
+            logger.info(f"Device {device_id} registered successfully. Matched: {result.matched_count}, Modified: {result.modified_count}, Upserted: {result.upserted_id}")
         
         return {
             "status": "success",
@@ -289,6 +309,67 @@ async def register_device(request: Request):
         logger.error(f"Exception type: {type(e).__name__}")
         import traceback
         logger.error(f"Traceback: {traceback.format_exc()}")
+        raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
+
+# Merge duplicate devices endpoint
+@app.post("/api/merge-duplicate-devices")
+async def merge_duplicate_devices(request: Request):
+    """Merge devices with same name and IP but different device_ids"""
+    try:
+        logger.info("Starting duplicate device merge process")
+        
+        # Find all devices grouped by name and IP
+        pipeline = [
+            {
+                "$group": {
+                    "_id": {"device_name": "$device_name", "ip_address": "$ip_address"},
+                    "devices": {"$push": "$$ROOT"},
+                    "count": {"$sum": 1}
+                }
+            },
+            {"$match": {"count": {"$gt": 1}}}
+        ]
+        
+        duplicate_groups = await devices_collection.aggregate(pipeline).to_list(None)
+        
+        merged_count = 0
+        for group in duplicate_groups:
+            devices = group["devices"]
+            # Keep the most recently seen device as the primary
+            primary_device = max(devices, key=lambda d: d.get("last_seen", datetime.min))
+            other_devices = [d for d in devices if d["_id"] != primary_device["_id"]]
+            
+            # Merge total flows
+            total_flows = sum(d.get("total_flows", 0) for d in devices)
+            
+            # Update primary device
+            await devices_collection.update_one(
+                {"_id": primary_device["_id"]},
+                {"$set": {"total_flows": total_flows}}
+            )
+            
+            # Delete duplicate devices
+            for device in other_devices:
+                await devices_collection.delete_one({"_id": device["_id"]})
+                # Also update flows to use the primary device_id
+                await flows_collection.update_many(
+                    {"device_id": device["device_id"]},
+                    {"$set": {"device_id": primary_device["device_id"]}}
+                )
+            
+            merged_count += len(other_devices)
+            logger.info(f"Merged {len(other_devices)} duplicates for {primary_device['device_name']}")
+        
+        logger.info(f"Duplicate device merge completed. Merged {merged_count} devices")
+        
+        return {
+            "status": "success",
+            "message": f"Merged {merged_count} duplicate devices",
+            "merged_count": merged_count
+        }
+        
+    except Exception as e:
+        logger.error(f"Error merging duplicate devices: {e}")
         raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
 
 # Batch flows endpoint
